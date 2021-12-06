@@ -35,7 +35,7 @@ func (e rbhEntries) at(i uint32) *rbhEntry {
 		uintptr(i)*unsafe.Sizeof(rbhEntry{})))
 }
 
-type HashFunc func(string2 string) uint32
+type HashFunc func(string2 string) uint64
 
 type rbhMap struct {
 	entries rbhEntries
@@ -71,9 +71,9 @@ func (r *rbhMap) init(cap int) {
 
 func (r *rbhMap) rehash(size uint32) {
 	oldEntries := r.entries
-	size = next2Power(size)
+	//size = next2Power(size)
 	r.size = size
-	r.shift = size - 1
+	r.shift = uint32(64 - bits.Len32(r.size-1))
 	r.maxDist = maxDistForSize(size)
 	r.entries = newRbhEntries(size + r.maxDist)
 	r.count = 0
@@ -96,11 +96,11 @@ func (r *rbhMap) Put(k string, v interface{}) {
 func (r *rbhMap) put(key string, val *entry) {
 	maybeExist := true
 	n := rbhEntry{key: key, value: val, dist: 0}
-	for i := uint32(r.hash(key) & r.shift); ; i++ {
+	for i := r.robinHoodHash(key); ; i++ {
 		e := r.entries.at(i)
 		if maybeExist && key == e.key {
 			//exist
-			e.value = val
+			e.value = n.value
 			return
 		}
 		if e.value == nil {
@@ -116,12 +116,16 @@ func (r *rbhMap) put(key string, val *entry) {
 		n.dist++
 		if n.dist == r.maxDist {
 			r.rehash(2 * r.size)
-			i = uint32(r.hash(key)>>r.shift) - 1
+			i = r.robinHoodHash(key) - 1
 			n.dist = 0
 			maybeExist = false
 		}
 	}
 
+}
+
+func (r *rbhMap) robinHoodHash(key string) uint32 {
+	return uint32(r.hash(key) >> r.shift)
 }
 
 func (r *rbhMap) Get(k string) (interface{}, bool) {
@@ -134,7 +138,7 @@ func (r *rbhMap) Get(k string) (interface{}, bool) {
 
 func (r *rbhMap) get(key string) (*entry, bool) {
 	var dist uint32
-	for i := uint32(r.hash(key) & r.shift); ; i++ {
+	for i := r.robinHoodHash(key); ; i++ {
 		e := r.entries.at(i)
 		if key == e.key {
 			return e.value, true
@@ -149,7 +153,7 @@ func (r *rbhMap) get(key string) (*entry, bool) {
 
 func (r *rbhMap) Delete(k string) {
 	var dist uint32
-	for i := uint32(r.hash(k) & r.shift); ; i++ {
+	for i := r.robinHoodHash(k); ; i++ {
 		e := r.entries.at(i)
 		if e.key == k {
 			r.count--
@@ -172,6 +176,26 @@ func (r *rbhMap) Delete(k string) {
 		}
 		dist++
 	}
+}
+
+type entries []*entry
+
+func (es entries) Iterator(f func(item *entry)) {
+	for _, v := range es {
+		f(v)
+	}
+}
+
+func (r *rbhMap) Entries() []*entry {
+	if r.entries.len == 0 {
+		return nil
+	}
+	res := make([]*entry, r.entries.len)
+	for i := uint32(0); i < r.entries.len; i++ {
+		rbEntry := r.entries.at(i)
+		res = append(res, rbEntry.value)
+	}
+	return res
 }
 
 func (r *rbhMap) findByValue(ent *entry) *rbhEntry {
